@@ -5,39 +5,50 @@ import pandas as pd
 from PIL import Image
 import requests
 from io import BytesIO
+import os
+import time # Import the time module
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="🏡 BukitVista Property Price Predictor", layout="wide")
+st.set_page_config(page_title="🏡 BukitVista Property Price Predictor (CNN)", layout="wide")
 st.title("🏡 BukitVista Property Price Prediction App")
 st.markdown("Upload a property image to predict its price category and see similar BukitVista listings.")
 
-# --- LOAD DATASET AUTOMATICALLY ---
+# Define hardcoded local paths
+DATASET_PATH = "bukitvista_analyst.xlsx"
+MODEL_PATH = "price_image_classifier.h5"
+
+# --- LOAD DATASET (Cached) ---
 @st.cache_data
-def load_dataset():
-    df = pd.read_excel("bukitvista_analyst.xlsx", sheet_name="Sheet1")
-    return df
+def load_dataset(path):
+    # Load dataset assuming it's in the same directory
+    try:
+        df = pd.read_excel(path, sheet_name="Sheet1")
+        return df
+    except FileNotFoundError:
+        st.error(f"❌ Dataset file not found: **{path}**.")
+        st.stop()
+    except Exception as e:
+        st.error(f"❌ Failed to load dataset: {e}")
+        st.stop()
 
-try:
-    df = load_dataset()
-    st.sidebar.success("✅ Dataset loaded successfully: bukitvista_analyst.xlsx")
-    st.sidebar.write("Columns detected:", df.columns.tolist())
-except Exception as e:
-    st.error(f"❌ Failed to load dataset: {e}")
-    st.stop()
+df = load_dataset(DATASET_PATH)
 
-# --- LOAD MODEL ---
-st.sidebar.header("🧠 Model Loader")
-model_file = st.sidebar.file_uploader("Upload your trained model (.h5)", type=["h5"])
+# --- LOAD MODEL (Cached Resource) ---
+@st.cache_resource
+def load_model_from_disk(path):
+    try:
+        return tf.keras.models.load_model(path)
+    except FileNotFoundError:
+        st.error(f"❌ Model file not found: **{path}**. Please ensure it's in the same folder.")
+        st.stop()
+    except Exception as e:
+        st.error(f"❌ An error occurred loading the model: {e}")
+        st.stop()
 
-if model_file is not None:
-    @st.cache_resource
-    def load_model():
-        return tf.keras.models.load_model(model_file)
-    model = load_model()
-    st.sidebar.success("✅ Model loaded successfully.")
-else:
-    st.sidebar.warning("Please upload your trained model (.h5) file to continue.")
-    st.stop()
+model = load_model_from_disk(MODEL_PATH)
+st.sidebar.success(f"✅ Model loaded successfully: {MODEL_PATH}")
+st.sidebar.success(f"✅ Dataset loaded successfully: {DATASET_PATH}")
+
 
 # --- LABELS AND PRICE RANGES ---
 class_labels = ['Low', 'Medium', 'High']
@@ -47,70 +58,108 @@ price_ranges = {
     "High": "$150+ per night"
 }
 
-# --- UPLOAD IMAGE FOR PREDICTION ---
-st.header("📤 Upload Property Image for Prediction")
-uploaded_img = st.file_uploader("Choose a property image...", type=["jpg", "jpeg", "png"])
-
-if uploaded_img is not None:
-    img = Image.open(uploaded_img).convert("RGB")
-    st.image(img, caption="🖼️ Uploaded Property Image", use_container_width=True)
-
-    # Preprocess
-    img_resized = img.resize((128, 128))
+# Preprocess the uploaded image
+def preprocess_image(img, target_size=(128, 128)):
+    # The model's input shape determines the required size
+    img_resized = img.resize(target_size)
     img_array = np.array(img_resized) / 255.0
     img_array = np.expand_dims(img_array, axis=0)
+    return img_array
+
+# Define price categorization function (used for filtering recommendations)
+def categorize_price(price):
+    if pd.isna(price):
+        return 'Unknown'
+    price = float(price)
+    if price < 70:
+        return 'Low'
+    elif 70 <= price <= 150:
+        return 'Medium'
+    else:
+        return 'High'
+
+# --- UPLOAD IMAGE FOR PREDICTION ---
+st.header("📤 Upload Property Image for Prediction")
+# Updated file uploader to accept more common image formats
+image_formats = ["jpg", "jpeg", "png", "webp", "tiff", "tif", "bmp", "gif"]
+uploaded_img = st.file_uploader("Choose a property image...", type=image_formats)
+
+if uploaded_img is not None:
+    # Get image input and target size
+    img = Image.open(uploaded_img).convert("RGB")
+    
+    # Determine target size from model input shape (assuming channels last, e.g., (None, 128, 128, 3))
+    input_shape = model.input_shape
+    target_size = (input_shape[1], input_shape[2]) if len(input_shape) == 4 else (128, 128)
+
+    st.image(img, caption=f"🖼️ Uploaded Property Image (Resized to {target_size[0]}x{target_size[1]})")
+
+    # Preprocess
+    img_array = preprocess_image(img, target_size)
 
     # Predict
     pred = model.predict(img_array)[0]
-    predicted_class = class_labels[np.argmax(pred)]
+    predicted_class_index = np.argmax(pred)
+    predicted_class = class_labels[predicted_class_index]
     confidence = np.max(pred) * 100
 
+    # --- Prediction Result (Same text output as Colab print) ---
     st.subheader("🎯 Prediction Result")
-    st.write(f"**Predicted Category:** {predicted_class}")
-    st.write(f"**Estimated Price Range:** {price_ranges[predicted_class]}")
-    st.write(f"**Confidence:** {confidence:.2f}%")
-    st.write("**Class Probabilities:**", dict(zip(class_labels, [f'{p*100:.2f}%' for p in pred])))
+    
+    st.markdown(f"**🏷️ Predicted class:** `{predicted_class}`")
+    st.markdown(f"**💵 Estimated price range:** `{price_ranges.get(predicted_class, 'N/A')}`")
+    st.markdown(f"**🔢 Confidence:** `{confidence:.2f}%`")
+    st.markdown(f"**🔍 Probabilities:** `{dict(zip(class_labels, [round(p*100,2) for p in pred]))}`")
 
-    # --- PROPERTY RECOMMENDATIONS ---
+
+    # --- Property Recommendations from Dataset ---
     st.header("🏘️ Similar Property Recommendations")
 
     if 'price_per_night' not in df.columns or 'picture_url' not in df.columns:
-        st.error("❌ Dataset must contain 'price_per_night' and 'picture_url' columns.")
+        st.error("❌ Dataset must contain 'price_per_night' and 'picture_url' columns for recommendations.")
     else:
-        def categorize_price(price):
-            if price < 70:
-                return 'Low'
-            elif 70 <= price <= 150:
-                return 'Medium'
-            else:
-                return 'High'
-
+        # Prepare recommendation data
+        df['price_per_night'] = pd.to_numeric(df['price_per_night'], errors='coerce')
         df['price_class'] = df['price_per_night'].apply(categorize_price)
+        
+        # Filter properties by the predicted class
         recos_df = df[df['price_class'] == predicted_class]
+        sample_size = min(3, len(recos_df))
 
-        if recos_df.empty:
-            st.warning("No similar properties found for this category.")
+        if recos_df.empty or sample_size == 0:
+            st.warning(f"No similar properties found in the dataset for the '{predicted_class}' category.")
         else:
-            recos_df = recos_df.sample(n=min(3, len(recos_df)))
+            # --- FIX: Use controlled random sampling for dynamic results ---
+            # Use the current system time as the random seed to ensure different results on each run
+            recos_df = recos_df.sample(
+                n=sample_size, 
+                random_state=int(time.time())
+            )
+            # -------------------------------------------------------------
+
+            st.markdown(f"🏡 Recommended Properties Similar to Uploaded Image (**{predicted_class}** range):")
+
+            # Create columns for the 3 recommendations
+            cols = st.columns(sample_size)
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; StreamlitApp/1.0)"}
+
             for i, row in recos_df.iterrows():
                 name = row.get("name", f"Property #{i+1}")
                 price = row["price_per_night"]
                 img_url = row["picture_url"]
 
-                col1, col2 = st.columns([1, 2])
-                with col1:
+                with cols[recos_df.index.get_loc(i)]:
+                    st.markdown(f"**{name}**")
+                    st.markdown(f"💵 **${price:.0f}/night**")
+
                     try:
-                        headers = {"User-Agent": "Mozilla/5.0"}
-                        response = requests.get(img_url, headers=headers, timeout=10)
+                        response = requests.get(img_url, headers=headers, timeout=5)
                         response.raise_for_status()
                         rec_img = Image.open(BytesIO(response.content))
-                        st.image(rec_img, use_container_width=True)
-                    except Exception as e:
-                        st.warning(f"⚠️ Could not load image for {name}")
+                        st.image(rec_img, caption=f"{predicted_class} Category")
+                    except Exception:
+                        st.warning("⚠️ Image load error.")
+                        st.image("https://placehold.co/300x200/cccccc/333333?text=Image+Unavailable")
 
-                with col2:
-                    st.markdown(f"### {name}")
-                    st.markdown(f"💵 **${price}/night**")
-                    st.markdown(f"🏷️ **Category:** {predicted_class}")
 else:
-    st.info("Please upload an image to start prediction.")
+    st.info("⬆️ Upload an image to start the property price prediction and view recommendations.")
