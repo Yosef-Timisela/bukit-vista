@@ -5,17 +5,17 @@ import pandas as pd
 from PIL import Image
 import requests
 from io import BytesIO
-import os
-import time # Import the time module
+import time 
+import os # Added for file path operations
+import tempfile # Added for creating temporary files
+
+# --- CONFIGURATION ---
+DATASET_PATH = "bukitvista_analyst.xlsx"
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="🏡 BukitVista Property Price Predictor (CNN)", layout="wide")
 st.title("🏡 BukitVista Property Price Prediction App")
-st.markdown("Upload a property image to predict its price category and see similar BukitVista listings.")
-
-# Define hardcoded local paths
-DATASET_PATH = "bukitvista_analyst.xlsx"
-MODEL_PATH = "price_image_classifier.h5"
+st.markdown("Upload your trained model, then upload a property image to predict its price category and see similar BukitVista listings.")
 
 # --- LOAD DATASET (Cached) ---
 @st.cache_data
@@ -25,29 +25,59 @@ def load_dataset(path):
         df = pd.read_excel(path, sheet_name="Sheet1")
         return df
     except FileNotFoundError:
-        st.error(f"❌ Dataset file not found: **{path}**.")
+        st.error(f"❌ Dataset file not found: **{path}**. Please ensure it is in the same folder.")
         st.stop()
     except Exception as e:
         st.error(f"❌ Failed to load dataset: {e}")
         st.stop()
 
 df = load_dataset(DATASET_PATH)
-
-# --- LOAD MODEL (Cached Resource) ---
-@st.cache_resource
-def load_model_from_disk(path):
-    try:
-        return tf.keras.models.load_model(path)
-    except FileNotFoundError:
-        st.error(f"❌ Model file not found: **{path}**. Please ensure it's in the same folder.")
-        st.stop()
-    except Exception as e:
-        st.error(f"❌ An error occurred loading the model: {e}")
-        st.stop()
-
-model = load_model_from_disk(MODEL_PATH)
-st.sidebar.success(f"✅ Model loaded successfully: {MODEL_PATH}")
 st.sidebar.success(f"✅ Dataset loaded successfully: {DATASET_PATH}")
+st.sidebar.write("Columns detected:", df.columns.tolist())
+
+# --- LOAD MODEL VIA UPLOAD ---
+st.sidebar.header("🧠 Model Loader")
+model_file = st.sidebar.file_uploader("Upload your trained model (.h5)", type=["h5"])
+
+model = None
+if model_file is not None:
+    # Use BytesIO to create a file-like object from the uploaded content
+    model_bytes = BytesIO(model_file.read())
+
+    # Use cache_resource so the model only loads once even if the user interacts with the app
+    @st.cache_resource
+    def load_uploaded_model(model_data):
+        # We must write the BytesIO object to a physical file for Keras/H5 to load it reliably.
+        temp_file_path = None
+        try:
+            # Create a temporary file with the correct extension
+            with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as temp_file:
+                # Rewind the BytesIO stream before writing its contents
+                model_data.seek(0)
+                temp_file.write(model_data.read())
+                temp_file_path = temp_file.name
+            
+            # Load the model from the physical temporary file path
+            model = tf.keras.models.load_model(temp_file_path)
+            
+            return model
+        except Exception as e:
+            st.error(f"❌ An error occurred loading the uploaded model: {e}")
+            st.stop()
+        finally:
+            # Clean up the temporary file after attempting to load
+            if temp_file_path and os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            
+    # Load the model
+    model = load_uploaded_model(model_bytes)
+    
+    if model:
+        st.sidebar.success("✅ Model loaded successfully from upload.")
+
+# If model is not loaded, stop execution until user uploads it
+if model is None:
+    st.stop()
 
 
 # --- LABELS AND PRICE RANGES ---
@@ -103,7 +133,7 @@ if uploaded_img is not None:
     predicted_class = class_labels[predicted_class_index]
     confidence = np.max(pred) * 100
 
-    # --- Prediction Result (Same text output as Colab print) ---
+    # --- Prediction Result ---
     st.subheader("🎯 Prediction Result")
     
     st.markdown(f"**🏷️ Predicted class:** `{predicted_class}`")
@@ -129,13 +159,12 @@ if uploaded_img is not None:
         if recos_df.empty or sample_size == 0:
             st.warning(f"No similar properties found in the dataset for the '{predicted_class}' category.")
         else:
-            # --- FIX: Use controlled random sampling for dynamic results ---
+            # Use controlled random sampling for dynamic results
             # Use the current system time as the random seed to ensure different results on each run
             recos_df = recos_df.sample(
                 n=sample_size, 
                 random_state=int(time.time())
             )
-            # -------------------------------------------------------------
 
             st.markdown(f"🏡 Recommended Properties Similar to Uploaded Image (**{predicted_class}** range):")
 
@@ -162,4 +191,4 @@ if uploaded_img is not None:
                         st.image("https://placehold.co/300x200/cccccc/333333?text=Image+Unavailable")
 
 else:
-    st.info("⬆️ Upload an image to start the property price prediction and view recommendations.")
+    st.info("⬆️ Please upload an image to start the property price prediction and view recommendations.")
