@@ -1,5 +1,5 @@
 import streamlit as st
-from keras.models import load_model
+import tensorflow as tf
 import numpy as np
 import pandas as pd
 from PIL import Image
@@ -7,15 +7,15 @@ import requests
 from io import BytesIO
 import time
 import os
-import tempfile  # Added for creating temporary files
+import tempfile
 
 # --- CONFIGURATION ---
 DATASET_PATH = "bukitvista_analyst.xlsx"
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="🏡 BukitVista Property Price Predictor (Keras)", layout="wide")
+st.set_page_config(page_title="🏡 BukitVista Property Price Predictor (CNN)", layout="wide")
 st.title("🏡 BukitVista Property Price Prediction App")
-st.markdown("Upload your trained model (.h5), then upload a property image to predict its price category and see similar BukitVista listings.")
+st.markdown("Upload your trained model, then upload a property image to predict its price category and see similar BukitVista listings.")
 
 # --- LOAD DATASET (Cached) ---
 @st.cache_data
@@ -46,13 +46,12 @@ if model_file is not None:
     def load_uploaded_model(model_data):
         temp_file_path = None
         try:
-            with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as temp_file:
+            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as temp_file:
                 model_data.seek(0)
                 temp_file.write(model_data.read())
                 temp_file_path = temp_file.name
 
-            # ✅ Load model using Keras only (no TensorFlow dependency)
-            model = load_model(temp_file_path)
+            model = tf.keras.models.load_model(temp_file_path)
             return model
         except Exception as e:
             st.error(f"❌ An error occurred loading the uploaded model: {e}")
@@ -66,44 +65,46 @@ if model_file is not None:
     if model:
         st.sidebar.success("✅ Model loaded successfully from upload.")
 
+# Stop execution until model is uploaded
 if model is None:
     st.stop()
 
 # --- LABELS AND PRICE RANGES ---
-class_labels = ['Low', 'Medium', 'High']
+class_labels = ["Low", "Medium", "High"]
 price_ranges = {
     "Low": "$30–70 per night",
     "Medium": "$70–150 per night",
-    "High": "$150+ per night"
+    "High": "$150+ per night",
 }
 
-# Preprocess the uploaded image
+# --- IMAGE PREPROCESSING ---
 def preprocess_image(img, target_size=(128, 128)):
     img_resized = img.resize(target_size)
     img_array = np.array(img_resized) / 255.0
     img_array = np.expand_dims(img_array, axis=0)
     return img_array
 
+# --- PRICE CATEGORY ---
 def categorize_price(price):
     if pd.isna(price):
-        return 'Unknown'
+        return "Unknown"
     price = float(price)
     if price < 70:
-        return 'Low'
+        return "Low"
     elif 70 <= price <= 150:
-        return 'Medium'
+        return "Medium"
     else:
-        return 'High'
+        return "High"
 
 # --- UPLOAD IMAGE FOR PREDICTION ---
 st.header("📤 Upload Property Image for Prediction")
+
 image_formats = ["jpg", "jpeg", "png", "webp", "tiff", "tif", "bmp", "gif"]
 uploaded_img = st.file_uploader("Choose a property image...", type=image_formats)
 
 if uploaded_img is not None:
     img = Image.open(uploaded_img).convert("RGB")
 
-    # Determine target size dynamically
     input_shape = model.input_shape
     target_size = (input_shape[1], input_shape[2]) if len(input_shape) == 4 else (128, 128)
 
@@ -111,29 +112,29 @@ if uploaded_img is not None:
 
     img_array = preprocess_image(img, target_size)
 
-    # Predict
+    # --- PREDICTION ---
     pred = model.predict(img_array)[0]
     predicted_class_index = np.argmax(pred)
     predicted_class = class_labels[predicted_class_index]
     confidence = np.max(pred) * 100
 
-    # --- Prediction Result ---
+    # --- PREDICTION RESULT ---
     st.subheader("🎯 Prediction Result")
-    st.markdown(f"**🏷️ Predicted class:** `{predicted_class}`")
-    st.markdown(f"**💵 Estimated price range:** `{price_ranges.get(predicted_class, 'N/A')}`")
-    st.markdown(f"**🔢 Confidence:** `{confidence:.2f}%`")
-    st.markdown(f"**🔍 Probabilities:** `{dict(zip(class_labels, [round(p*100,2) for p in pred]))}`")
+    st.markdown(f"**🏷️ Predicted class:** {predicted_class}")
+    st.markdown(f"**💵 Estimated price range:** {price_ranges.get(predicted_class, 'N/A')}")
+    st.markdown(f"**🔢 Confidence:** {confidence:.2f}%")
+    st.markdown(f"**🔍 Probabilities:** {dict(zip(class_labels, [round(p * 100, 2) for p in pred]))}")
 
-    # --- Property Recommendations from Dataset ---
+    # --- RECOMMENDATIONS ---
     st.header("🏘️ Similar Property Recommendations")
 
-    if 'price_per_night' not in df.columns or 'picture_url' not in df.columns:
+    if "price_per_night" not in df.columns or "picture_url" not in df.columns:
         st.error("❌ Dataset must contain 'price_per_night' and 'picture_url' columns for recommendations.")
     else:
-        df['price_per_night'] = pd.to_numeric(df['price_per_night'], errors='coerce')
-        df['price_class'] = df['price_per_night'].apply(categorize_price)
+        df["price_per_night"] = pd.to_numeric(df["price_per_night"], errors="coerce")
+        df["price_class"] = df["price_per_night"].apply(categorize_price)
 
-        recos_df = df[df['price_class'] == predicted_class]
+        recos_df = df[df["price_class"] == predicted_class]
         sample_size = min(3, len(recos_df))
 
         if recos_df.empty or sample_size == 0:
