@@ -1,5 +1,6 @@
-pip>=25.3
+--upgrade pip
 streamlit==1.38.0
+tensorflow-cpu==2.12.0
 keras==2.12.0
 h5py==3.10.0
 numpy==1.23.5
