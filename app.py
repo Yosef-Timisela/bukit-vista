@@ -1,26 +1,25 @@
 import streamlit as st
-import tensorflow as tf
+from keras.models import load_model
 import numpy as np
 import pandas as pd
 from PIL import Image
 import requests
 from io import BytesIO
-import time 
-import os # Added for file path operations
-import tempfile # Added for creating temporary files
+import time
+import os
+import tempfile  # Added for creating temporary files
 
 # --- CONFIGURATION ---
 DATASET_PATH = "bukitvista_analyst.xlsx"
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="🏡 BukitVista Property Price Predictor (CNN)", layout="wide")
+st.set_page_config(page_title="🏡 BukitVista Property Price Predictor (Keras)", layout="wide")
 st.title("🏡 BukitVista Property Price Prediction App")
-st.markdown("Upload your trained model, then upload a property image to predict its price category and see similar BukitVista listings.")
+st.markdown("Upload your trained model (.h5), then upload a property image to predict its price category and see similar BukitVista listings.")
 
 # --- LOAD DATASET (Cached) ---
 @st.cache_data
 def load_dataset(path):
-    # Load dataset assuming it's in the same directory
     try:
         df = pd.read_excel(path, sheet_name="Sheet1")
         return df
@@ -41,44 +40,34 @@ model_file = st.sidebar.file_uploader("Upload your trained model (.h5)", type=["
 
 model = None
 if model_file is not None:
-    # Use BytesIO to create a file-like object from the uploaded content
     model_bytes = BytesIO(model_file.read())
 
-    # Use cache_resource so the model only loads once even if the user interacts with the app
     @st.cache_resource
     def load_uploaded_model(model_data):
-        # We must write the BytesIO object to a physical file for Keras/H5 to load it reliably.
         temp_file_path = None
         try:
-            # Create a temporary file with the correct extension
             with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as temp_file:
-                # Rewind the BytesIO stream before writing its contents
                 model_data.seek(0)
                 temp_file.write(model_data.read())
                 temp_file_path = temp_file.name
-            
-            # Load the model from the physical temporary file path
-            model = tf.keras.models.load_model(temp_file_path)
-            
+
+            # ✅ Load model using Keras only (no TensorFlow dependency)
+            model = load_model(temp_file_path)
             return model
         except Exception as e:
             st.error(f"❌ An error occurred loading the uploaded model: {e}")
             st.stop()
         finally:
-            # Clean up the temporary file after attempting to load
             if temp_file_path and os.path.exists(temp_file_path):
                 os.remove(temp_file_path)
-            
-    # Load the model
+
     model = load_uploaded_model(model_bytes)
-    
+
     if model:
         st.sidebar.success("✅ Model loaded successfully from upload.")
 
-# If model is not loaded, stop execution until user uploads it
 if model is None:
     st.stop()
-
 
 # --- LABELS AND PRICE RANGES ---
 class_labels = ['Low', 'Medium', 'High']
@@ -90,13 +79,11 @@ price_ranges = {
 
 # Preprocess the uploaded image
 def preprocess_image(img, target_size=(128, 128)):
-    # The model's input shape determines the required size
     img_resized = img.resize(target_size)
     img_array = np.array(img_resized) / 255.0
     img_array = np.expand_dims(img_array, axis=0)
     return img_array
 
-# Define price categorization function (used for filtering recommendations)
 def categorize_price(price):
     if pd.isna(price):
         return 'Unknown'
@@ -110,21 +97,18 @@ def categorize_price(price):
 
 # --- UPLOAD IMAGE FOR PREDICTION ---
 st.header("📤 Upload Property Image for Prediction")
-# Updated file uploader to accept more common image formats
 image_formats = ["jpg", "jpeg", "png", "webp", "tiff", "tif", "bmp", "gif"]
 uploaded_img = st.file_uploader("Choose a property image...", type=image_formats)
 
 if uploaded_img is not None:
-    # Get image input and target size
     img = Image.open(uploaded_img).convert("RGB")
-    
-    # Determine target size from model input shape (assuming channels last, e.g., (None, 128, 128, 3))
+
+    # Determine target size dynamically
     input_shape = model.input_shape
     target_size = (input_shape[1], input_shape[2]) if len(input_shape) == 4 else (128, 128)
 
     st.image(img, caption=f"🖼️ Uploaded Property Image (Resized to {target_size[0]}x{target_size[1]})")
 
-    # Preprocess
     img_array = preprocess_image(img, target_size)
 
     # Predict
@@ -135,12 +119,10 @@ if uploaded_img is not None:
 
     # --- Prediction Result ---
     st.subheader("🎯 Prediction Result")
-    
     st.markdown(f"**🏷️ Predicted class:** `{predicted_class}`")
     st.markdown(f"**💵 Estimated price range:** `{price_ranges.get(predicted_class, 'N/A')}`")
     st.markdown(f"**🔢 Confidence:** `{confidence:.2f}%`")
     st.markdown(f"**🔍 Probabilities:** `{dict(zip(class_labels, [round(p*100,2) for p in pred]))}`")
-
 
     # --- Property Recommendations from Dataset ---
     st.header("🏘️ Similar Property Recommendations")
@@ -148,27 +130,19 @@ if uploaded_img is not None:
     if 'price_per_night' not in df.columns or 'picture_url' not in df.columns:
         st.error("❌ Dataset must contain 'price_per_night' and 'picture_url' columns for recommendations.")
     else:
-        # Prepare recommendation data
         df['price_per_night'] = pd.to_numeric(df['price_per_night'], errors='coerce')
         df['price_class'] = df['price_per_night'].apply(categorize_price)
-        
-        # Filter properties by the predicted class
+
         recos_df = df[df['price_class'] == predicted_class]
         sample_size = min(3, len(recos_df))
 
         if recos_df.empty or sample_size == 0:
             st.warning(f"No similar properties found in the dataset for the '{predicted_class}' category.")
         else:
-            # Use controlled random sampling for dynamic results
-            # Use the current system time as the random seed to ensure different results on each run
-            recos_df = recos_df.sample(
-                n=sample_size, 
-                random_state=int(time.time())
-            )
+            recos_df = recos_df.sample(n=sample_size, random_state=int(time.time()))
 
             st.markdown(f"🏡 Recommended Properties Similar to Uploaded Image (**{predicted_class}** range):")
 
-            # Create columns for the 3 recommendations
             cols = st.columns(sample_size)
             headers = {"User-Agent": "Mozilla/5.0 (compatible; StreamlitApp/1.0)"}
 
