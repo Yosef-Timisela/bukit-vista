@@ -4,7 +4,7 @@ Bukit Vista is a property management and hospitality company that manages variou
 
 However, Bukit Vista faces two main challenges:
 1. **Understanding & Managing Property Insights (Data Analyst Focus)**
-  > With a growing number of listings, the company needs to identify key trends such as price distribution, guest ratings, location clusters, and property types to make data-driven decisions in marketing, pricing, and property acquisition.
+    With a growing number of listings, the company needs to identify key trends such as price distribution, guest ratings, location clusters, and property types to make data-driven decisions in marketing, pricing, and property acquisition.
 
 2. **Enhancing Guest Experience Through Visual Discovery (Data Scientist Focus)**
   >
