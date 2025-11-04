@@ -33,12 +33,15 @@ Therefore, this project integrates two complementary approaches:
 💡 **Project Objectives**
 
 1. **Data Analytics Goal**:
-- Develop an interactive, real-time web dashboard (using tools such as Streamlit or Google Looker Studio) that visualizes property performance metrics, pricing trends, location clusters, and guest insights.
+- Develop an interactive, real-time web dashboard (using tools such as Google Looker Studio) that visualizes property performance metrics, pricing trends, location clusters, and guest insights.
+- You can access my real-time web dashboard with this link : https://lookerstudio.google.com/reporting/ef7122c4-8295-44c3-99e2-3964ccc61acb
+- You can access my google sheets to update my web dashboard in real-time with this link : 
 
 2. **Data Science Goal**:
 - Build an image mining model using TensorFlow and Keras that can:
 - Predict the price range (Low, Medium, High) of an uploaded property image.
 - Recommend visually similar properties from the Bukit Vista dataset based on the image’s features.
+- You can access my apps with this link : https://bukit-vista-project.streamlit.app/
 
 Display predicted price range, confidence score, and preview images of the recommended listings.
 
