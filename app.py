@@ -8,16 +8,24 @@ from io import BytesIO
 import time
 import os
 import tempfile
+import gzip
+
+# ==============================
+# 🏡 BukitVista Property Price Predictor (CNN - TFLite Version)
+# ==============================
 
 # --- CONFIGURATION ---
 DATASET_PATH = "bukitvista_analyst.xlsx"
+DEFAULT_MODEL_PATH = "models/price_image_classifier_quant.tflite.gz"
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="🏡 BukitVista Property Price Predictor (CNN)", layout="wide")
 st.title("🏡 BukitVista Property Price Prediction App")
-st.markdown("Upload your trained model, then upload a property image to predict its price category and see similar BukitVista listings.")
+st.markdown("Upload your trained model (TFLite), then upload a property image to predict its price category and see similar BukitVista listings.")
 
-# --- LOAD DATASET (Cached) ---
+# ==============================
+# 📊 LOAD DATASET (CACHED)
+# ==============================
 @st.cache_data
 def load_dataset(path):
     try:
@@ -34,42 +42,56 @@ df = load_dataset(DATASET_PATH)
 st.sidebar.success(f"✅ Dataset loaded successfully: {DATASET_PATH}")
 st.sidebar.write("Columns detected:", df.columns.tolist())
 
-# --- LOAD MODEL VIA UPLOAD ---
+# ==============================
+# 🧠 LOAD MODEL (TFLITE + GZIP)
+# ==============================
 st.sidebar.header("🧠 Model Loader")
-model_file = st.sidebar.file_uploader("Upload your trained model (.h5)", type=["h5"])
+model_file = st.sidebar.file_uploader("Upload your trained model (.tflite or .tflite.gz)", type=["tflite", "gz"])
 
-model = None
-if model_file is not None:
-    model_bytes = BytesIO(model_file.read())
+@st.cache_resource
+def load_tflite_model(model_bytes):
+    """Load a TensorFlow Lite model from bytes (optionally gzipped)."""
+    try:
+        if model_bytes[:2] == b'\x1f\x8b':  # gzip magic bytes
+            with gzip.GzipFile(fileobj=BytesIO(model_bytes), mode='rb') as gz:
+                model_content = gz.read()
+        else:
+            model_content = model_bytes
 
-    @st.cache_resource
-    def load_uploaded_model(model_data):
-        temp_file_path = None
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".h5", delete=False) as temp_file:
-                model_data.seek(0)
-                temp_file.write(model_data.read())
-                temp_file_path = temp_file.name
+        interpreter = tf.lite.Interpreter(model_content=model_content)
+        interpreter.allocate_tensors()
+        return interpreter
+    except Exception as e:
+        st.error(f"❌ Failed to load TFLite model: {e}")
+        st.stop()
 
-            model = tf.keras.models.load_model(temp_file_path)
-            return model
-        except Exception as e:
-            st.error(f"❌ An error occurred loading the uploaded model: {e}")
-            st.stop()
-        finally:
-            if temp_file_path and os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
-
-    model = load_uploaded_model(model_bytes)
-
-    if model:
-        st.sidebar.success("✅ Model loaded successfully from upload.")
-
-# Stop execution until model is uploaded
-if model is None:
+# Try to load uploaded model, else default model
+interpreter = None
+if model_file:
+    interpreter = load_tflite_model(model_file.read())
+    st.sidebar.success("✅ Uploaded model loaded successfully.")
+elif os.path.exists(DEFAULT_MODEL_PATH):
+    with open(DEFAULT_MODEL_PATH, "rb") as f:
+        interpreter = load_tflite_model(f.read())
+    st.sidebar.success("✅ Default model loaded successfully from repository.")
+else:
+    st.warning("⚠️ Please upload or include a TFLite model file.")
     st.stop()
 
-# --- LABELS AND PRICE RANGES ---
+# ==============================
+# 🧮 PREDICTION HELPER
+# ==============================
+def predict_tflite(interpreter, input_data):
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    interpreter.set_tensor(input_details[0]['index'], input_data)
+    interpreter.invoke()
+    output_data = interpreter.get_tensor(output_details[0]['index'])
+    return output_data
+
+# ==============================
+# 🏷️ LABELS & PRICE RANGES
+# ==============================
 class_labels = ["Low", "Medium", "High"]
 price_ranges = {
     "Low": "$30–70 per night",
@@ -77,14 +99,18 @@ price_ranges = {
     "High": "$150+ per night",
 }
 
-# --- IMAGE PREPROCESSING ---
+# ==============================
+# 🖼️ IMAGE PREPROCESSING
+# ==============================
 def preprocess_image(img, target_size=(128, 128)):
     img_resized = img.resize(target_size)
     img_array = np.array(img_resized) / 255.0
-    img_array = np.expand_dims(img_array, axis=0)
+    img_array = np.expand_dims(img_array, axis=0).astype(np.float32)
     return img_array
 
-# --- PRICE CATEGORY ---
+# ==============================
+# 💰 PRICE CATEGORIZATION
+# ==============================
 def categorize_price(price):
     if pd.isna(price):
         return "Unknown"
@@ -96,7 +122,9 @@ def categorize_price(price):
     else:
         return "High"
 
-# --- UPLOAD IMAGE FOR PREDICTION ---
+# ==============================
+# 📤 IMAGE UPLOAD & PREDICTION
+# ==============================
 st.header("📤 Upload Property Image for Prediction")
 
 image_formats = ["jpg", "jpeg", "png", "webp", "tiff", "tif", "bmp", "gif"]
@@ -105,7 +133,9 @@ uploaded_img = st.file_uploader("Choose a property image...", type=image_formats
 if uploaded_img is not None:
     img = Image.open(uploaded_img).convert("RGB")
 
-    input_shape = model.input_shape
+    # Try to infer input size from model (or fallback)
+    input_details = interpreter.get_input_details()
+    input_shape = input_details[0]['shape']
     target_size = (input_shape[1], input_shape[2]) if len(input_shape) == 4 else (128, 128)
 
     st.image(img, caption=f"🖼️ Uploaded Property Image (Resized to {target_size[0]}x{target_size[1]})")
@@ -113,19 +143,21 @@ if uploaded_img is not None:
     img_array = preprocess_image(img, target_size)
 
     # --- PREDICTION ---
-    pred = model.predict(img_array)[0]
+    pred = predict_tflite(interpreter, img_array)[0]
     predicted_class_index = np.argmax(pred)
     predicted_class = class_labels[predicted_class_index]
     confidence = np.max(pred) * 100
 
-    # --- PREDICTION RESULT ---
+    # --- DISPLAY RESULT ---
     st.subheader("🎯 Prediction Result")
     st.markdown(f"**🏷️ Predicted class:** {predicted_class}")
     st.markdown(f"**💵 Estimated price range:** {price_ranges.get(predicted_class, 'N/A')}")
     st.markdown(f"**🔢 Confidence:** {confidence:.2f}%")
     st.markdown(f"**🔍 Probabilities:** {dict(zip(class_labels, [round(p * 100, 2) for p in pred]))}")
 
-    # --- RECOMMENDATIONS ---
+    # ==============================
+    # 🏘️ SIMILAR PROPERTY RECOMMENDATIONS
+    # ==============================
     st.header("🏘️ Similar Property Recommendations")
 
     if "price_per_night" not in df.columns or "picture_url" not in df.columns:
