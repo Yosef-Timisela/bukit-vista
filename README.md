@@ -35,7 +35,7 @@ Therefore, this project integrates two complementary approaches:
 1. **Data Analytics Goal**:
 - Develop an interactive, real-time web dashboard (using tools such as Google Looker Studio) that visualizes property performance metrics, pricing trends, location clusters, and guest insights.
 - You can access my real-time web dashboard with this link : https://lookerstudio.google.com/reporting/ef7122c4-8295-44c3-99e2-3964ccc61acb
-- You can access my google sheets to update my web dashboard in real-time with this link : 
+- You can access my google sheets to update my web dashboard in real-time with this link : https://docs.google.com/spreadsheets/d/1Tsabrx_V9XeseqGgHyprkxdSquRLN8QO70HBcSz_fLc/edit?usp=sharing
 
 2. **Data Science Goal**:
 - Build an image mining model using TensorFlow and Keras that can:
