@@ -7,8 +7,6 @@ import requests
 from io import BytesIO
 import time
 import os
-import tempfile
-import gzip
 
 # ==============================
 # 🏡 BukitVista Property Price Predictor (CNN - TFLite Version)
@@ -16,12 +14,12 @@ import gzip
 
 # --- CONFIGURATION ---
 DATASET_PATH = "bukitvista_analyst.xlsx"
-DEFAULT_MODEL_PATH = "models/price_image_classifier_quant.tflite.gz"
+MODEL_FILENAME = "price_image_classifier_quant.tflite"  # auto detect model in repo
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="🏡 BukitVista Property Price Predictor (CNN)", layout="wide")
 st.title("🏡 BukitVista Property Price Prediction App")
-st.markdown("Upload your trained model (TFLite), then upload a property image to predict its price category and see similar BukitVista listings.")
+st.markdown("Upload a property image to predict its price category and see similar BukitVista listings.")
 
 # ==============================
 # 📊 LOAD DATASET (CACHED)
@@ -43,40 +41,30 @@ st.sidebar.success(f"✅ Dataset loaded successfully: {DATASET_PATH}")
 st.sidebar.write("Columns detected:", df.columns.tolist())
 
 # ==============================
-# 🧠 LOAD MODEL (TFLITE + GZIP)
+# 🧠 AUTO-LOAD TFLITE MODEL FROM SAME FOLDER
 # ==============================
-st.sidebar.header("🧠 Model Loader")
-model_file = st.sidebar.file_uploader("Upload your trained model (.tflite or .tflite.gz)", type=["tflite", "gz"])
-
 @st.cache_resource
-def load_tflite_model(model_bytes):
-    """Load a TensorFlow Lite model from bytes (optionally gzipped)."""
+def load_default_model():
+    """Automatically load the TFLite model from the repo folder."""
+    if not os.path.exists(MODEL_FILENAME):
+        st.error(f"❌ Model file not found: {MODEL_FILENAME}. Please place it in the same folder as this app.")
+        st.stop()
+
     try:
-        if model_bytes[:2] == b'\x1f\x8b':  # gzip magic bytes
-            with gzip.GzipFile(fileobj=BytesIO(model_bytes), mode='rb') as gz:
-                model_content = gz.read()
-        else:
-            model_content = model_bytes
+        with open(MODEL_FILENAME, "rb") as f:
+            model_content = f.read()
 
         interpreter = tf.lite.Interpreter(model_content=model_content)
         interpreter.allocate_tensors()
         return interpreter
+
     except Exception as e:
-        st.error(f"❌ Failed to load TFLite model: {e}")
+        st.error(f"❌ Failed to load the TFLite model: {e}")
         st.stop()
 
-# Try to load uploaded model, else default model
-interpreter = None
-if model_file:
-    interpreter = load_tflite_model(model_file.read())
-    st.sidebar.success("✅ Uploaded model loaded successfully.")
-elif os.path.exists(DEFAULT_MODEL_PATH):
-    with open(DEFAULT_MODEL_PATH, "rb") as f:
-        interpreter = load_tflite_model(f.read())
-    st.sidebar.success("✅ Default model loaded successfully from repository.")
-else:
-    st.warning("⚠️ Please upload or include a TFLite model file.")
-    st.stop()
+st.sidebar.header("🧠 Model Loader")
+interpreter = load_default_model()
+st.sidebar.success("✅ Model loaded automatically from repository.")
 
 # ==============================
 # 🧮 PREDICTION HELPER
@@ -133,7 +121,7 @@ uploaded_img = st.file_uploader("Choose a property image...", type=image_formats
 if uploaded_img is not None:
     img = Image.open(uploaded_img).convert("RGB")
 
-    # Try to infer input size from model (or fallback)
+    # Try to infer input size from model
     input_details = interpreter.get_input_details()
     input_shape = input_details[0]['shape']
     target_size = (input_shape[1], input_shape[2]) if len(input_shape) == 4 else (128, 128)
@@ -170,10 +158,9 @@ if uploaded_img is not None:
         sample_size = min(3, len(recos_df))
 
         if recos_df.empty or sample_size == 0:
-            st.warning(f"No similar properties found in the dataset for the '{predicted_class}' category.")
+            st.warning(f"No similar properties found for category '{predicted_class}'.")
         else:
             recos_df = recos_df.sample(n=sample_size, random_state=int(time.time()))
-
             st.markdown(f"🏡 Recommended Properties Similar to Uploaded Image (**{predicted_class}** range):")
 
             cols = st.columns(sample_size)
@@ -198,4 +185,4 @@ if uploaded_img is not None:
                         st.image("https://placehold.co/300x200/cccccc/333333?text=Image+Unavailable")
 
 else:
-    st.info("⬆️ Please upload an image to start the property price prediction and view recommendations.")
+    st.info("⬆️ Please upload an image to start prediction.")
